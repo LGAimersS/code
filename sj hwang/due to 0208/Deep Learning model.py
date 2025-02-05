@@ -16,19 +16,34 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🖥 Using device: {device}")
 
 # 평가 지표 계산 함수
+# 평가 지표 계산 함수 (메모리 최적화)
 def evaluate_model(y_true, y_pred, model_name):
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_true, y_pred)
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    try:
+        # 🔹 1D 배열로 변환 (2D 또는 다른 차원 방지)
+        y_true = np.array(y_true).reshape(-1).astype(np.float32)
+        y_pred = np.array(y_pred).reshape(-1).astype(np.float32)
 
-    print(f"📊 {model_name} 평가 결과:")
-    print(f"✅ MSE  (Mean Squared Error): {mse:.4f}")
-    print(f"✅ RMSE (Root Mean Squared Error): {rmse:.4f}")
-    print(f"✅ MAE  (Mean Absolute Error): {mae:.4f}")
-    print(f"✅ MAPE (Mean Absolute Percentage Error): {mape:.2f}%\n")
+        # 🔹 크기 맞추기 (예측값이 더 많을 경우 자르기)
+        min_length = min(len(y_true), len(y_pred))
+        y_true, y_pred = y_true[:min_length], y_pred[:min_length]
 
-    return mse, rmse, mae, mape
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_true, y_pred)
+        mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8))) * 100  # 0으로 나누는 문제 방지
+
+        print(f"📊 {model_name} 평가 결과:")
+        print(f"✅ MSE  (Mean Squared Error): {mse:.4f}")
+        print(f"✅ RMSE (Root Mean Squared Error): {rmse:.4f}")
+        print(f"✅ MAE  (Mean Absolute Error): {mae:.4f}")
+        print(f"✅ MAPE (Mean Absolute Percentage Error): {mape:.2f}%\n")
+
+        return mse, rmse, mae, mape
+
+    except Exception as e:
+        print(f"🚨 {model_name}: 평가 오류 발생 - {e}")
+        return None
+
 
 # 데이터셋 클래스
 class TimeSeriesDataset(Dataset):
