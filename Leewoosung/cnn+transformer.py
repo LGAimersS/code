@@ -1,129 +1,97 @@
 import pandas as pd
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.utils.data as data
+import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.impute import SimpleImputer
+import os
 
 from google.colab import drive
-
-# 구글 드라이브 마운트
 drive.mount('/content/drive')
 
-# 전처리된 데이터 로드
-train_df = pd.read_csv("/content/drive/MyDrive/open/processed_train.csv")
-test_df = pd.read_csv("/content/drive/MyDrive/open/processed_test.csv")
-sample_submission = pd.read_csv("/content/drive/MyDrive/open/sample_submission.csv")
+# 데이터 로드
+def load_data(train_path, test_path):
+    train_df = pd.read_csv(train_path)
+    test_df = pd.read_csv(test_path)
 
-# 데이터 분할
-y = train_df['임신 성공 여부']
-X = train_df.drop(columns=['임신 성공 여부'])
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    train_df.drop(columns=['ID'], errors='ignore', inplace=True)
+    test_df.drop(columns=['ID'], errors='ignore', inplace=True)
 
-# PyTorch Dataset 생성
-class FertilityDataset(data.Dataset):
-    def __init__(self, X, y=None):
-        self.X = torch.tensor(X.values, dtype=torch.float32)
-        self.y = torch.tensor(y.values, dtype=torch.long) if y is not None else None
+    return train_df, test_df
 
-    def __len__(self):
-        return len(self.X)
+# 결측값 처리
+def handle_missing_values(train_df, test_df):
+    num_imputer = SimpleImputer(strategy="mean")
+    cat_imputer = SimpleImputer(strategy="most_frequent")
 
-    def __getitem__(self, idx):
-        return (self.X[idx], self.y[idx]) if self.y is not None else self.X[idx]
+    numerical_cols = train_df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    categorical_cols = train_df.select_dtypes(include=['object']).columns.tolist()
 
-train_dataset = FertilityDataset(X_train, y_train)
-val_dataset = FertilityDataset(X_val, y_val)
-test_dataset = FertilityDataset(test_df, None)
+    if '임신 성공 여부' in numerical_cols:
+        numerical_cols.remove('임신 성공 여부')
 
-train_loader = data.DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = data.DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = data.DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_df[numerical_cols] = num_imputer.fit_transform(train_df[numerical_cols])
+    test_df[numerical_cols] = num_imputer.transform(test_df[numerical_cols])
 
-# CNN + Transformer 모델 정의
-class CNNTransformerModel(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super(CNNTransformerModel, self).__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2)
-        )
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=32, nhead=4), num_layers=2
-        )
-        self.fc = nn.Linear(32 * (input_dim // 2), num_classes)
-        self.softmax = nn.Softmax(dim=1)  # 확률값 변환
+    train_df[categorical_cols] = cat_imputer.fit_transform(train_df[categorical_cols])
+    test_df[categorical_cols] = cat_imputer.transform(test_df[categorical_cols])
 
-    def forward(self, x):
-        x = x.unsqueeze(1)  # (batch, 1, features)
-        x = self.cnn(x).permute(2, 0, 1)  # (seq_len, batch, features)
-        x = self.transformer(x).permute(1, 0, 2).flatten(start_dim=1)  # (batch, features)
-        x = self.fc(x)
-        return self.softmax(x)
+    return train_df, test_df, numerical_cols, categorical_cols
 
-# 모델 초기화
-input_dim = X_train.shape[1]
-num_classes = len(y_train.unique())
-model = CNNTransformerModel(input_dim, num_classes)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+# 범주형 변수 인코딩
+def encode_categorical_features(train_df, test_df, categorical_cols):
+    for col in categorical_cols:
+        le = LabelEncoder()
+        train_df[col] = le.fit_transform(train_df[col])
+        category_mapping = {category: idx for idx, category in enumerate(le.classes_)}
+        test_df[col] = test_df[col].map(category_mapping).fillna(-1).astype(int)
 
-# 손실 함수 및 옵티마이저 설정
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    return train_df, test_df
 
-# 학습 루프
-def train_model(model, train_loader, val_loader, criterion, optimizer, epochs=10):
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        for X_batch, y_batch in train_loader:
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            optimizer.zero_grad()
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
+# 데이터 정규화 (표준화)
+def scale_numerical_features(train_df, test_df, numerical_cols):
+    scaler = StandardScaler()
+    train_df[numerical_cols] = scaler.fit_transform(train_df[numerical_cols])
+    test_df[numerical_cols] = scaler.transform(test_df[numerical_cols])
+    return train_df, test_df
 
-        model.eval()
-        # Initialize correct and total as separate variables
-        correct = 0  # Initialize correct to 0
-        total = 0    # Initialize total to 0
-        with torch.no_grad():
-            for X_batch, y_batch in val_loader:
-                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-                outputs = model(X_batch)
-                _, predicted = torch.max(outputs, 1)
-                total += y_batch.size(0)
-                correct += (predicted == y_batch).sum().item()
+# 데이터 분할 및 CNN 입력 변환
+def prepare_for_cnn(train_df, test_df):
+    X = train_df.drop(columns=['임신 성공 여부'])
+    y = train_df['임신 성공 여부']
 
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss:.4f}, Val Accuracy: {correct / total:.4f}")
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# 모델 학습 실행
-train_model(model, train_loader, val_loader, criterion, optimizer, epochs=10)
+    X_train_cnn = X_train.values.reshape(X_train.shape[0], X_train.shape[1], 1)
+    X_val_cnn = X_val.values.reshape(X_val.shape[0], X_val.shape[1], 1)
+    X_test_cnn = test_df.values.reshape(test_df.shape[0], test_df.shape[1], 1)
 
-# 모델 저장
-model_path = "/content/drive/MyDrive/open/cnn_transform_model.pth"
-torch.save(model.state_dict(), model_path)
-print(f"Model saved to {model_path}")
+    return X_train_cnn, X_val_cnn, X_test_cnn, y_train, y_val, X_train, X_val, test_df
 
-# 테스트 데이터 예측
-model.eval()
-predictions = []
-with torch.no_grad():
-    for X_batch in test_loader:
-        X_batch = X_batch.to(device)
-        outputs = model(X_batch)
-        probabilities = outputs[:, 1]  # Positive class probability
-        predictions.extend(probabilities.cpu().numpy())
+# 전체 전처리 실행 함수
+def preprocess_data(train_path, test_path, output_dir):
+    train_df, test_df = load_data(train_path, test_path)
+    train_df, test_df, numerical_cols, categorical_cols = handle_missing_values(train_df, test_df)
+    train_df, test_df = encode_categorical_features(train_df, test_df, categorical_cols)
+    train_df, test_df = scale_numerical_features(train_df, test_df, numerical_cols)
+    X_train_cnn, X_val_cnn, X_test_cnn, y_train, y_val, X_train, X_val, test_df = prepare_for_cnn(train_df, test_df)
 
-# 샘플 제출 파일 양식에 맞춰 저장
-submission = sample_submission.copy()
-submission['probability'] = predictions
-submission.to_csv("/content/drive/MyDrive/open/final_submission.csv", index=False)
+    # 폴더 생성
+    os.makedirs(output_dir, exist_ok=True)
 
-# 결과 확인
-print("Final Submission Sample:")
-print(submission.head())
+    # CSV 파일 저장
+    X_train.to_csv(f"{output_dir}/X_train.csv", index=False)
+    X_val.to_csv(f"{output_dir}/X_val.csv", index=False)
+    test_df.to_csv(f"{output_dir}/X_test.csv", index=False)
+    y_train.to_csv(f"{output_dir}/y_train.csv", index=False)
+    y_val.to_csv(f"{output_dir}/y_val.csv", index=False)
+
+    return X_train_cnn, X_val_cnn, X_test_cnn, y_train, y_val
+
+# 실행 코드
+if __name__ == "__main__":
+    train_path = "/content/drive/MyDrive/open/train.csv"
+    test_path = "/content/drive/MyDrive/open/test.csv"
+    output_dir = "preprocessed_data"  # 저장할 폴더 지정
+
+    preprocess_data(train_path, test_path, output_dir)
+    print("전처리가 완료되었습니다. CSV 파일이 저장되었습니다.")
