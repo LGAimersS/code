@@ -37,7 +37,7 @@ def handle_missing_values(train_df, test_df):
 
     return train_df, test_df, numerical_cols, categorical_cols
 
-# 범주형 변수 인코딩
+# 문자열 변수 인코딩
 def encode_categorical_features(train_df, test_df, categorical_cols):
     for col in categorical_cols:
         le = LabelEncoder()
