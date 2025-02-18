@@ -5,6 +5,9 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.impute import SimpleImputer
 import os
 
+from google.colab import drive
+drive.mount('/content/drive')
+
 def load_data(train_path, test_path):
     train_df = pd.read_csv(train_path)
     test_df = pd.read_csv(test_path)
