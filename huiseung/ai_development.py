@@ -65,11 +65,10 @@ class FertilityDataset(Dataset):
             return self.features[idx], self.targets[idx]
         return self.features[idx]
 
-# 개선된 학습 함수: Early Stopping 추가
-def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs=50, scheduler=None, patience=5):
+# 개선된 학습 함수
+def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs=50, scheduler=None):
     best_val_loss = float('inf')
     best_model = None
-    counter = 0
 
     for epoch in range(epochs):
         # Training Phase
@@ -127,17 +126,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, e
         val_accuracy = 100 * val_correct / val_total
         val_auc = roc_auc_score(val_true, val_preds)
 
-        # Early Stopping 체크
+        # 최적 모델 저장
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_model = model.state_dict().copy()
-            counter = 0
-        else:
-            counter += 1
-            if counter >= patience:
-                print(f'Early stopping at epoch {epoch+1}')
-                model.load_state_dict(best_model)
-                break
 
         if scheduler is not None:
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -150,9 +142,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, e
         print(f'Val Loss: {avg_val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%, Val AUC: {val_auc:.4f}')
         print('-' * 60)
 
-    # 조기 종료되지 않았다면 best model 사용
-    if counter < patience:
-        model.load_state_dict(best_model)
+    # 최종적으로 best model 사용
+    model.load_state_dict(best_model)
     return model
 
 # Neural Network Models
@@ -687,7 +678,7 @@ class EnhancedFertilityEnsemble:
 
             transformer = train_model(
                 transformer, train_loader, val_loader, criterion, optimizer, self.device,
-                epochs=50, scheduler=scheduler, patience=10
+                epochs=50, scheduler=scheduler
             )
 
             # CNN 모델 학습
@@ -711,7 +702,7 @@ class EnhancedFertilityEnsemble:
 
             cnn = train_model(
                 cnn, train_loader, val_loader, criterion, optimizer, self.device,
-                epochs=50, scheduler=scheduler, patience=10
+                epochs=50, scheduler=scheduler
             )
 
             # GRU 모델 학습 (새로 추가)
@@ -737,7 +728,7 @@ class EnhancedFertilityEnsemble:
 
             gru = train_model(
                 gru, train_loader, val_loader, criterion, optimizer, self.device,
-                epochs=50, scheduler=scheduler, patience=10
+                epochs=50, scheduler=scheduler
             )
 
             # LightGBM 모델 학습
@@ -762,7 +753,6 @@ class EnhancedFertilityEnsemble:
                 X_train_scaled, y_train,
                 eval_set=[(X_val_scaled, y_val)],
                 eval_metric='auc',
-                early_stopping_rounds=100,
                 verbose=100
             )
 
@@ -793,7 +783,6 @@ class EnhancedFertilityEnsemble:
             xgb.fit(
                 X_train_scaled, y_train,
                 eval_set=[(X_val_scaled, y_val)],
-                early_stopping_rounds=100,
                 verbose=100
             )
 
@@ -819,7 +808,6 @@ class EnhancedFertilityEnsemble:
             cat.fit(
                 X_train_scaled, y_train,
                 eval_set=(X_val_scaled, y_val),
-                early_stopping_rounds=50,
                 verbose=0
             )
 
